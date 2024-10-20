@@ -18,15 +18,21 @@ def iniciar_servidor(host='localhost', porta=8080):
         conexao, endereco = servidor_socket.accept()
         print(f"Conexão estabelecida com {endereco}")
 
-        pacote = conexao.recv(1024).decode()
-        dados, checksum_recebido = pacote.split('|')
+        while True:
+            pacote = conexao.recv(1024).decode()
+            if not pacote:
+                break  
 
-        if verificar_integridade(dados, checksum_recebido):
-            conexao.send("Mensagem recebida com sucesso!".encode())
-            print("Dados recebidos sem erros.")
-        else:
-            conexao.send("Erro na integridade dos dados.".encode())
-            print("Erro de integridade detectado!")
+            numero_sequencia, dados, checksum_recebido = pacote.split('|')
+
+            if verificar_integridade(dados, checksum_recebido):
+                resposta = f"ACK {numero_sequencia}: recebido com sucesso."
+                print(f"Pacote {numero_sequencia} recebido sem erros.")
+            else:
+                resposta = f"NACK {numero_sequencia}: erro na integridade dos dados."
+                print(f"Erro de integridade no pacote {numero_sequencia}!")
+
+            conexao.send(resposta.encode())
 
         conexao.close()
         print(f"Conexão com {endereco} encerrada")
