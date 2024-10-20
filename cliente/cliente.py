@@ -1,6 +1,7 @@
 import socket
 import hashlib
 import random
+import time
 
 def calcular_checksum(dados):
     return hashlib.md5(dados.encode()).hexdigest()
@@ -39,8 +40,13 @@ def enviar_pacote(cliente_socket, erro=False):
     pacote = f"{numero_sequencia}|{mensagem}|{checksum}"
     cliente_socket.send(pacote.encode())
 
+    time.sleep(1)
     resposta = cliente_socket.recv(1024).decode()
-    print(f"Resposta do servidor: {resposta}")
+    print(f"""
+=================== Resposta do servidor ===================
+ \n{resposta}\n
+============================================================
+""")
 
 def atualizar_janela_de_congestionamento(cliente_socket):
     print("a fazer")
