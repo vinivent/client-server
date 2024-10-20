@@ -1,5 +1,6 @@
 import socket
 import hashlib
+import random
 
 def calcular_checksum(dados):
     return hashlib.md5(dados.encode()).hexdigest()
@@ -23,6 +24,20 @@ def iniciar_servidor(host='localhost', porta=8080):
             if not pacote:
                 break  
 
+            if pacote.startswith("PROTOCOLO"):
+                _, protocolo = pacote.split('|')
+                print(f"Protocolo negociado: {protocolo}")
+                resposta = f"Protocolo {protocolo} negociado com sucesso."
+                conexao.send(resposta.encode())
+                continue
+
+            if pacote.startswith("ATUALIZAR_JANELA"):
+                _, nova_janela = pacote.split('|')
+                print(f"Janela de congestionamento atualizada para: {nova_janela}")
+                resposta = f"Janela de congestionamento agora é {nova_janela}."
+                conexao.send(resposta.encode())
+                continue
+            
             numero_sequencia, dados, checksum_recebido = pacote.split('|')
 
             if verificar_integridade(dados, checksum_recebido):
