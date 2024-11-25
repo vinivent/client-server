@@ -1,67 +1,104 @@
 import socket
 import threading
-from header import unpack_header, calculate_checksum, header_size
 
-def send_ack(client_socket, ack_type, seq_num):
-    try:
-        client_socket.sendall(ack_type)
-        print(f"{ack_type.decode()} enviado para o cliente! (seq_num: {seq_num})\n")
-    except Exception as e:
-        print(f"Erro ao enviar {ack_type.decode()} para o cliente: {e}")
+def iniciar_servidor(host='127.0.0.1', porta=50500):
+    servidor_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    servidor_socket.bind((host, porta))
+    servidor_socket.listen()
+    print(f"Servidor ativo em {host}:{porta}")
+    while True:
+        conexao_cliente, endereco_cliente = servidor_socket.accept()
+        print(f"Cliente conectado: {endereco_cliente}")
+        threading.Thread(target=processar_cliente, args=(conexao_cliente,)).start()
 
-def handle_client(client_socket):
-    try:
-        buffer = b""
-        while True:
-            data = client_socket.recv(1024)
-            if not data:
-                print("Cliente desconectado.\n")
-                break
-            buffer += data
+def calcular_checksum(dados):
+    return str(sum(ord(c) for c in dados) % 256)
 
-            while b'\n' in buffer:
-                raw_packet, buffer = buffer.split(b'\n', 1)
+def processar_cliente(conexao):
+    protocolo_recebido = conexao.recv(1024).decode().strip()
+    if protocolo_recebido not in ["Selective Repeat", "Go-Back-N"]:
+        conexao.send("ERRO".encode())
+        conexao.close()
+        return
+    conexao.send("ACEITO".encode())
+    print(f"Protocolo negociado: {protocolo_recebido}")
+    print("------------------------------")
 
-                if len(raw_packet) < header_size:
-                    print("Cabeçalho inválido, descartando pacote.\n")
-                    continue
+    numero_sequencia_atual = 0
+    janela_recepcao = 5
+    pacotes_recebidos = {}
 
-                header_data = raw_packet[:header_size]
-                seq_num, ack_num, flags, checksum, payload_len = unpack_header(header_data)
-                payload = raw_packet[header_size:header_size + payload_len]
+    while True:
+        mensagem = conexao.recv(1024)
+        if not mensagem:
+            break
 
-                if len(payload) != payload_len or checksum != calculate_checksum(payload):
-                    print(f"Erro no pacote: Checksum ou payload incorreto. (seq_num: {seq_num})\n")
-                    send_ack(client_socket, b'ACK4', seq_num)
-                    continue
+        conteudo = mensagem.decode()
+        print(f"Mensagem recebida: {conteudo}")
 
-                try:
-                    message = payload.decode('utf-8')
-                    print(f"Mensagem recebida: {message} (seq_num: {seq_num})")
-                    send_ack(client_socket, b'ACK1', seq_num)
-                except UnicodeDecodeError:
-                    print(f"Erro ao decodificar mensagem. (seq_num: {seq_num})\n")
-                    send_ack(client_socket, b'ACK4', seq_num)
-    except Exception as e:
-        print(f"Erro ao processar cliente: {e}")
-    finally:
-        client_socket.close()
+        if conteudo.startswith("IGNORAR"):
+            _, dados = conteudo.split(":", 1)
+            print(f"Mensagem marcada para ignorar: '{dados}'. Ignorando pacote.")
+            continue
 
-def create_server(host="localhost", port=12345):
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server_socket.bind((host, port))
-    server_socket.listen(5)
-    print(f"Servidor iniciado em {host}:{port}")
+        if conteudo.startswith("LOTE"):
+            _, seq_inicial, pacotes = conteudo.split(":", 2)
+            seq_inicial = int(seq_inicial)
+            pacotes = pacotes.split(",")
+            erro_detectado = False
 
-    try:
-        while True:
-            client_socket, addr = server_socket.accept()
-            print(f"Conexão aceita de {addr}")
-            threading.Thread(target=handle_client, args=(client_socket,)).start()
-    except KeyboardInterrupt:
-        print("\nEncerrando servidor.")
-    finally:
-        server_socket.close()
+            for pacote in pacotes:
+                checksum_recebido, dados = pacote.split(":", 1)
+                if calcular_checksum(dados) != checksum_recebido:
+                    erro_detectado = True
+                    break
 
-if __name__ == "__main__":
-    create_server()
+            if erro_detectado:
+                resposta = f"NACK:{numero_sequencia_atual}:[{numero_sequencia_atual}-{numero_sequencia_atual + janela_recepcao - 1}]"
+            else:
+                numero_sequencia_atual += len(pacotes)
+                resposta = f"ACK:{seq_inicial}:[{numero_sequencia_atual}-{numero_sequencia_atual + janela_recepcao - 1}]"
+
+            conexao.send(f"{resposta}:{calcular_checksum(resposta)}".encode())
+            continue
+
+        try:
+            numero_sequencia, checksum_recebido, dados = conteudo.split(":")
+            numero_sequencia = int(numero_sequencia)
+
+            checksum_calculado = calcular_checksum(dados)
+            if checksum_recebido != checksum_calculado:
+                resposta = f"NACK:{numero_sequencia_atual}:[{numero_sequencia_atual}-{numero_sequencia_atual + janela_recepcao - 1}]"
+                print(f"Erro de integridade. Enviando NACK: {resposta}")
+                conexao.send(f"{resposta}:{calcular_checksum(resposta)}".encode())
+                continue
+
+            if protocolo_recebido == "Go-Back-N":
+                if numero_sequencia == numero_sequencia_atual:
+                    numero_sequencia_atual += 1
+                    resposta = f"ACK:{numero_sequencia}:[{numero_sequencia_atual}-{numero_sequencia_atual + janela_recepcao - 1}]"
+                else:
+                    resposta = f"NACK:{numero_sequencia_atual}:[{numero_sequencia_atual}-{numero_sequencia_atual + janela_recepcao - 1}]"
+            elif protocolo_recebido == "Selective Repeat":
+                if numero_sequencia == numero_sequencia_atual:
+                    numero_sequencia_atual += 1
+                    while numero_sequencia_atual in pacotes_recebidos:
+                        numero_sequencia_atual += 1
+                    resposta = f"ACK:{numero_sequencia}:[{numero_sequencia_atual}-{numero_sequencia_atual + janela_recepcao - 1}]"
+                else:
+                    pacotes_recebidos[numero_sequencia] = dados
+                    resposta = f"ACK:{numero_sequencia}:[{numero_sequencia_atual}-{numero_sequencia_atual + janela_recepcao - 1}]"
+
+            conexao.send(f"{resposta}:{calcular_checksum(resposta)}".encode())
+            print(f"Resposta enviada: {resposta}")
+
+        except ValueError:
+            resposta = f"NACK:{numero_sequencia_atual}:[{numero_sequencia_atual}-{numero_sequencia_atual + janela_recepcao - 1}]"
+            print(f"Erro no formato da mensagem. Enviando NACK: {resposta}")
+            conexao.send(f"{resposta}:{calcular_checksum(resposta)}".encode())
+
+    conexao.close()
+    print("Conexão com o cliente encerrada.")
+
+if __name__ == '__main__':
+    iniciar_servidor()

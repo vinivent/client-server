@@ -1,114 +1,194 @@
 import socket
 import time
-from header import pack_header, calculate_checksum
 
-def send_message(message, sock, ack_num, seq_num, corrupt=False):
+# Função principal para iniciar o cliente
+def iniciar_cliente_interativo(host='127.0.0.1', porta=50500):
+    # Inicializa o socket do cliente
+    cliente_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    cliente_socket.connect((host, porta))
+
+    # Variáveis iniciais para controle de estado
+    numero_sequencia = 0  # Número de sequência atual
+    tamanho_janela_congestao = 1  # Janela de congestionamento inicial
+    janela_recebimento = (0, 0)  # Janela de recepção inicial
+
+    print("Bem-vindo ao Cliente de Transporte Confiável")
+
+    # Negociação do protocolo
+    while True:
+        protocolo = input("Escolha o protocolo (SR para Selective Repeat / GBN para Go-Back-N): ").strip().upper()
+        if protocolo in ["SR", "GBN"]:
+            break
+        print("Entrada inválida! Digite 'SR' para Selective Repeat ou 'GBN' para Go-Back-N.")
+    
+    protocolo_completo = "Selective Repeat" if protocolo == "SR" else "Go-Back-N"
+    cliente_socket.send(protocolo_completo.encode())
+    resposta = cliente_socket.recv(1024).decode()
+    if resposta != "ACEITO":
+        print("Negociação do protocolo falhou. Encerrando cliente.")
+        cliente_socket.close()
+        return
+
+    print(f"Protocolo '{protocolo_completo}' negociado com sucesso!")
+    print("------------------------------")
+
+    # Loop principal para opções do cliente
+    while True:
+        print("\nOpções disponíveis:")
+        print("1. Enviar um único pacote")
+        print("2. Enviar múltiplos pacotes (rajada)")
+        print("3. Simular erro de integridade")
+        print("4. Manipular número de sequência")
+        print("5. Forçar NACK com erro no pacote")
+        print("6. Enviar pacote para teste de timeout (sem ACK)")
+        print("7. Enviar pacote que será ignorado pelo servidor")
+        print("8. Enviar lote de pacotes")
+        print("9. Sair")
+        opcao = input("Escolha uma opção: ")
+
+        if opcao == '1':
+            conteudo = input("Digite o conteúdo do pacote: ")
+            numero_sequencia, tamanho_janela_congestao, janela_recebimento = enviar_pacote(
+                cliente_socket, numero_sequencia, conteudo, tamanho_janela_congestao, janela_recebimento
+            )
+
+        elif opcao == '2':
+            num_pacotes = int(input("Digite o número de pacotes a enviar em rajada: "))
+            pacotes = [input(f"Conteúdo do pacote {i + 1}: ") for i in range(num_pacotes)]
+            numero_sequencia, tamanho_janela_congestao, janela_recebimento = enviar_rajada(
+                cliente_socket, pacotes, numero_sequencia, tamanho_janela_congestao, janela_recebimento
+            )
+
+        elif opcao == '3':
+            checksum_errado = input("Digite um checksum incorreto para simular erro: ")
+            conteudo = input("Digite o conteúdo do pacote: ")
+            numero_sequencia, tamanho_janela_congestao, janela_recebimento = enviar_com_erro_checksum(
+                cliente_socket, numero_sequencia, conteudo, checksum_errado, tamanho_janela_congestao, janela_recebimento
+            )
+
+        elif opcao == '4':
+            seq_manipulado = int(input("Informe o número de sequência manipulado: "))
+            conteudo = input("Digite o conteúdo do pacote: ")
+            enviar_pacote(cliente_socket, seq_manipulado, conteudo, tamanho_janela_congestao, janela_recebimento)
+
+        elif opcao == '5':
+            conteudo = input("Digite o conteúdo do pacote para gerar NACK: ")
+            numero_sequencia, tamanho_janela_congestao, janela_recebimento = enviar_forcando_nack(
+                cliente_socket, numero_sequencia, conteudo, tamanho_janela_congestao, janela_recebimento
+            )
+
+        elif opcao == '6':
+            conteudo = input("Digite o conteúdo do pacote: ")
+            enviar_pacote_sem_ack(cliente_socket, numero_sequencia, conteudo)
+
+        elif opcao == '7':
+            conteudo = input("Digite o conteúdo do pacote a ser ignorado: ")
+            enviar_pacote_para_ignorar(cliente_socket, conteudo)
+
+        elif opcao == '8':
+            num_pacotes = int(input("Digite o número de pacotes no lote: "))
+            pacotes = [input(f"Conteúdo do pacote {i + 1}: ") for i in range(num_pacotes)]
+            numero_sequencia, tamanho_janela_congestao, janela_recebimento = enviar_lote(
+                cliente_socket, pacotes, numero_sequencia, tamanho_janela_congestao, janela_recebimento
+            )
+
+        elif opcao == '9':
+            print("Encerrando o cliente...")
+            break
+
+        else:
+            print("Opção inválida. Tente novamente.")
+
+        print("------------------------------")
+
+    cliente_socket.close()
+
+# Calcula o checksum de uma mensagem
+def calcular_checksum(mensagem):
+    return str(sum(ord(ch) for ch in mensagem) % 256)
+
+# Envia um único pacote
+def enviar_pacote(cliente_socket, seq, conteudo, janela_congestao, janela_recebimento):
+    checksum = calcular_checksum(conteudo)
+    pacote = f"{seq}:{checksum}:{conteudo}".encode()
+    print(f"Enviando pacote: {pacote.decode()}")
+    cliente_socket.send(pacote)
+    resposta = cliente_socket.recv(1024).decode()
+    print(f"Resposta do servidor: {resposta}")
+    return processar_resposta(resposta, seq, janela_congestao, janela_recebimento)
+
+# Envia um pacote com erro de checksum
+def enviar_com_erro_checksum(cliente_socket, seq, conteudo, checksum_errado, janela_congestao, janela_recebimento):
+    pacote = f"{seq}:{checksum_errado}:{conteudo}".encode()
+    print(f"Enviando pacote com erro de integridade: {pacote.decode()}")
+    cliente_socket.send(pacote)
+    resposta = cliente_socket.recv(1024).decode()
+    print(f"Resposta do servidor: {resposta}")
+    return processar_resposta(resposta, seq, janela_congestao, janela_recebimento, atualizar_sequencia=False)
+
+# Envia múltiplos pacotes (rajada)
+def enviar_rajada(cliente_socket, pacotes, seq, janela_congestao, janela_recebimento):
+    for conteudo in pacotes:
+        seq, janela_congestao, janela_recebimento = enviar_pacote(cliente_socket, seq, conteudo, janela_congestao, janela_recebimento)
+    return seq, janela_congestao, janela_recebimento
+
+# Ignora um pacote
+def enviar_pacote_para_ignorar(cliente_socket, conteudo):
+    mensagem = f"IGNORAR:{conteudo}".encode()
+    print(f"Enviando pacote para ser ignorado: {mensagem.decode()}")
+    cliente_socket.send(mensagem)
+
+# Envia um pacote sem expectativa de ACK
+def enviar_pacote_sem_ack(cliente_socket, seq, conteudo):
+    mensagem = f"TIMEOUT:{seq}:{calcular_checksum(conteudo)}:{conteudo}".encode()
+    print(f"Enviando pacote sem expectativa de ACK: {mensagem.decode()}")
+    cliente_socket.send(mensagem)
+
+# Envia lote de pacotes
+def enviar_lote(cliente_socket, pacotes, seq, janela_congestao, janela_recebimento):
+    lote = ",".join(f"{calcular_checksum(p)}:{p}" for p in pacotes)
+    mensagem = f"LOTE:{seq}:{lote}".encode()
+    print(f"Enviando lote de pacotes: {mensagem.decode()}")
+    cliente_socket.send(mensagem)
+    resposta = cliente_socket.recv(1024).decode()
+    print(f"Resposta do servidor: {resposta}")
+    return processar_resposta(resposta, seq + len(pacotes), janela_congestao, janela_recebimento)
+
+# Envia um pacote para forçar um NACK no servidor
+def enviar_forcando_nack(cliente_socket, seq, conteudo, janela_congestao, janela_recebimento):
+    # Usa um checksum incorreto para simular erro
+    checksum_errado = "000"
+    pacote = f"{seq}:{checksum_errado}:{conteudo}".encode()
+    print(f"Enviando pacote para forçar NACK: {pacote.decode()}")
+    cliente_socket.send(pacote)
+    resposta = cliente_socket.recv(1024).decode()
+    print(f"Resposta do servidor: {resposta}")
+    # Processa a resposta do servidor para ajustar o estado
+    return processar_resposta(resposta, seq, janela_congestao, janela_recebimento, atualizar_sequencia=False)
+
+# Processa a resposta do servidor
+def processar_resposta(resposta, seq, janela_congestao, janela_recebimento, atualizar_sequencia=True):
     try:
-        payload = message.encode('utf-8')
-        checksum = calculate_checksum(payload)
+        conteudo, checksum_recebido = resposta.rsplit(":", 1)
+        checksum_calculado = calcular_checksum(conteudo)
 
-        if corrupt:
-            # Simula corrupção no checksum
-            checksum = (checksum + 1) % 256
+        if checksum_recebido != checksum_calculado:
+            print("Erro no checksum da resposta.")
+            return seq, janela_congestao, janela_recebimento
 
-        header = pack_header(seq_num, ack_num, 0b00000001, checksum, len(payload))
-        packet = header + payload + b'\n'
-        sock.sendall(packet)
-        print(f"\nPacote {'corrompido' if corrupt else 'íntegro'} enviado. (seq_num: {seq_num})")
-        response = sock.recv(1024)
-        return response
-    except socket.timeout:
-        print(f"\nTimeout: Sem resposta do servidor. (seq_num: {seq_num})\n")
-        return None
+        ack, recebido, janela_info = conteudo.split(":")
+        recebido = int(recebido)
+        inicio, fim = map(int, janela_info.strip("[]").split("-"))
 
-def create_message(message, ack_num, seq_num):
-    payload = message.encode('utf-8')
-    checksum = calculate_checksum(payload)
-    header = pack_header(seq_num, ack_num, 0b00000001, checksum, len(payload))
-    return header + payload
+        janela_recebimento = (inicio, fim)
+        if ack == "ACK" and atualizar_sequencia:
+            seq = recebido + 1
+        elif ack == "NACK":
+            janela_congestao = max(1, janela_congestao // 2)
 
-def send_batch_response_per_packet(messages, sock, ack_num, seq_start, window_size):
-    seq_num = seq_start
-    total_messages = len(messages)
-    index = 0
+    except ValueError:
+        print("Erro ao processar resposta.")
+    return seq, janela_congestao, janela_recebimento
 
-    while index < total_messages:
-        window_end = min(index + window_size, total_messages)
-        batch_packets = b''
-
-        print(f"\nInício da Janela. Enviando mensagens {index + 1} a {window_end}.\n")
-
-        for i in range(index, window_end):
-            packet = create_message(messages[i], ack_num, seq_num)
-            batch_packets += packet + b'\n'
-            seq_num += 1
-
-        # Envia lote de pacotes
-        sock.sendall(batch_packets)
-        print(f"Lote enviado: {index + 1} a {window_end}.")
-
-        # Processa respostas para o lote
-        for i in range(index, window_end):
-            try:
-                response = sock.recv(1024)
-                if response == b'ACK1':
-                    print(f"ACK1 recebido! Mensagem {i + 1} confirmada com sucesso.\n")
-                elif response == b'ACK4':
-                    print(f"ACK4 recebido! Mensagem {i + 1} corrompida. Reenviando.\n")
-                    packet = create_message(messages[i], ack_num, seq_num - (window_end - i))
-                    sock.sendall(packet + b'\n')
-            except socket.timeout:
-                print(f"Timeout ao aguardar resposta para mensagem {i + 1}.\n")
-
-        index += window_size
-        print(f"Fim da Janela.\n")
-
-def create_client(host="localhost", port=12345, timeout=30):  # Timeout ajustado para 30 segundos
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.connect((host, port))
-        sock.settimeout(timeout)  # Timeout ajustado
-        try:
-            seq_num = 100
-            while True:
-                menu_input = input("\nEscolha uma opção:\n"
-                                   "1 - Enviar mensagem íntegra\n"
-                                   "2 - Enviar mensagens em lote\n"
-                                   "3 - Simular mensagem corrompida\n"
-                                   "0 - Sair\n"
-                                   "Digite sua opção: ")
-                if menu_input == '0':
-                    break
-
-                if menu_input == '1':
-                    message = input("\nDigite sua mensagem: ")
-                    ack_num = 1
-                    response = send_message(message, sock, ack_num, seq_num)
-                    if response == b'ACK1':
-                        print(f"\nACK1 recebido! Mensagem enviada com sucesso. (seq_num: {seq_num})\n")
-                    elif response == b'ACK4':
-                        print(f"\nACK4 recebido. Mensagem corrompida. (seq_num: {seq_num})\n")
-                    seq_num += 1
-
-                elif menu_input == '2':
-                    num_messages = int(input("\nDigite o número de mensagens a enviar: "))
-                    messages = [input(f"Digite a mensagem {i + 1}: ") for i in range(num_messages)]
-                    window_size = int(input("\nDigite o tamanho da janela: "))
-                    send_batch_response_per_packet(messages, sock, ack_num=1, seq_start=seq_num, window_size=window_size)
-                    seq_num += num_messages
-
-                elif menu_input == '3':
-                    message = input("\nDigite sua mensagem para simular corrupção: ")
-                    ack_num = 2
-                    response = send_message(message, sock, ack_num, seq_num, corrupt=True)
-                    if response == b'ACK4':
-                        print(f"\nACK4 recebido. Mensagem corrompida detectada. (seq_num: {seq_num})\n")
-                    seq_num += 1
-
-                else:
-                    print("\nOpção inválida. Tente novamente.\n")
-        finally:
-            print("\nEncerrando conexão.")
-            sock.close()
-
-if __name__ == "__main__":
-    create_client()
+if __name__ == '__main__':
+    iniciar_cliente_interativo()
