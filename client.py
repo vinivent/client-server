@@ -1,20 +1,22 @@
 import socket
 import time
 
-# Função principal para iniciar o cliente
+
+TAMANHO_MAXIMO_MENSAGEM = 10
+
+
 def iniciar_cliente_interativo(host='127.0.0.1', porta=50500):
-    # Inicializa o socket do cliente
+
     cliente_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     cliente_socket.connect((host, porta))
 
-    # Variáveis iniciais para controle de estado
-    numero_sequencia = 0  # Número de sequência atual
-    tamanho_janela_congestao = 1  # Janela de congestionamento inicial
-    janela_recebimento = (0, 0)  # Janela de recepção inicial
+    numero_sequencia = 0  
+    tamanho_janela_congestao = 1  
+    janela_recebimento = (0, 0)  
 
     print("Bem-vindo ao Cliente de Transporte Confiável")
 
-    # Negociação do protocolo
+
     while True:
         protocolo = input("Escolha o protocolo (SR para Selective Repeat / GBN para Go-Back-N): ").strip().upper()
         if protocolo in ["SR", "GBN"]:
@@ -32,7 +34,6 @@ def iniciar_cliente_interativo(host='127.0.0.1', porta=50500):
     print(f"Protocolo '{protocolo_completo}' negociado com sucesso!")
     print("------------------------------")
 
-    # Loop principal para opções do cliente
     while True:
         print("\nOpções disponíveis:")
         print("1. Enviar um único pacote")
@@ -103,12 +104,16 @@ def iniciar_cliente_interativo(host='127.0.0.1', porta=50500):
 
     cliente_socket.close()
 
-# Calcula o checksum de uma mensagem
+
 def calcular_checksum(mensagem):
     return str(sum(ord(ch) for ch in mensagem) % 256)
 
-# Envia um único pacote
+
 def enviar_pacote(cliente_socket, seq, conteudo, janela_congestao, janela_recebimento):
+    if len(conteudo) > TAMANHO_MAXIMO_MENSAGEM:
+        print(f"A mensagem excede o tamanho máximo de {TAMANHO_MAXIMO_MENSAGEM} caracteres. Será truncada.")
+        conteudo = conteudo[:TAMANHO_MAXIMO_MENSAGEM]
+    
     checksum = calcular_checksum(conteudo)
     pacote = f"{seq}:{checksum}:{conteudo}".encode()
     print(f"Enviando pacote: {pacote.decode()}")
@@ -117,7 +122,13 @@ def enviar_pacote(cliente_socket, seq, conteudo, janela_congestao, janela_recebi
     print(f"Resposta do servidor: {resposta}")
     return processar_resposta(resposta, seq, janela_congestao, janela_recebimento)
 
-# Envia um pacote com erro de checksum
+
+def enviar_rajada(cliente_socket, pacotes, seq, janela_congestao, janela_recebimento):
+    for conteudo in pacotes:
+        seq, janela_congestao, janela_recebimento = enviar_pacote(cliente_socket, seq, conteudo, janela_congestao, janela_recebimento)
+    return seq, janela_congestao, janela_recebimento
+
+
 def enviar_com_erro_checksum(cliente_socket, seq, conteudo, checksum_errado, janela_congestao, janela_recebimento):
     pacote = f"{seq}:{checksum_errado}:{conteudo}".encode()
     print(f"Enviando pacote com erro de integridade: {pacote.decode()}")
@@ -126,25 +137,19 @@ def enviar_com_erro_checksum(cliente_socket, seq, conteudo, checksum_errado, jan
     print(f"Resposta do servidor: {resposta}")
     return processar_resposta(resposta, seq, janela_congestao, janela_recebimento, atualizar_sequencia=False)
 
-# Envia múltiplos pacotes (rajada)
-def enviar_rajada(cliente_socket, pacotes, seq, janela_congestao, janela_recebimento):
-    for conteudo in pacotes:
-        seq, janela_congestao, janela_recebimento = enviar_pacote(cliente_socket, seq, conteudo, janela_congestao, janela_recebimento)
-    return seq, janela_congestao, janela_recebimento
 
-# Ignora um pacote
 def enviar_pacote_para_ignorar(cliente_socket, conteudo):
     mensagem = f"IGNORAR:{conteudo}".encode()
     print(f"Enviando pacote para ser ignorado: {mensagem.decode()}")
     cliente_socket.send(mensagem)
 
-# Envia um pacote sem expectativa de ACK
+
 def enviar_pacote_sem_ack(cliente_socket, seq, conteudo):
     mensagem = f"TIMEOUT:{seq}:{calcular_checksum(conteudo)}:{conteudo}".encode()
     print(f"Enviando pacote sem expectativa de ACK: {mensagem.decode()}")
     cliente_socket.send(mensagem)
 
-# Envia lote de pacotes
+
 def enviar_lote(cliente_socket, pacotes, seq, janela_congestao, janela_recebimento):
     lote = ",".join(f"{calcular_checksum(p)}:{p}" for p in pacotes)
     mensagem = f"LOTE:{seq}:{lote}".encode()
@@ -154,19 +159,17 @@ def enviar_lote(cliente_socket, pacotes, seq, janela_congestao, janela_recebimen
     print(f"Resposta do servidor: {resposta}")
     return processar_resposta(resposta, seq + len(pacotes), janela_congestao, janela_recebimento)
 
-# Envia um pacote para forçar um NACK no servidor
+
 def enviar_forcando_nack(cliente_socket, seq, conteudo, janela_congestao, janela_recebimento):
-    # Usa um checksum incorreto para simular erro
     checksum_errado = "000"
     pacote = f"{seq}:{checksum_errado}:{conteudo}".encode()
     print(f"Enviando pacote para forçar NACK: {pacote.decode()}")
     cliente_socket.send(pacote)
     resposta = cliente_socket.recv(1024).decode()
     print(f"Resposta do servidor: {resposta}")
-    # Processa a resposta do servidor para ajustar o estado
     return processar_resposta(resposta, seq, janela_congestao, janela_recebimento, atualizar_sequencia=False)
 
-# Processa a resposta do servidor
+
 def processar_resposta(resposta, seq, janela_congestao, janela_recebimento, atualizar_sequencia=True):
     try:
         conteudo, checksum_recebido = resposta.rsplit(":", 1)

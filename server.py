@@ -1,6 +1,9 @@
 import socket
 import threading
 
+
+TAMANHO_MAXIMO_MENSAGEM = 10
+
 def iniciar_servidor(host='127.0.0.1', porta=50500):
     servidor_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     servidor_socket.bind((host, porta))
@@ -49,6 +52,10 @@ def processar_cliente(conexao):
 
             for pacote in pacotes:
                 checksum_recebido, dados = pacote.split(":", 1)
+                if len(dados) > TAMANHO_MAXIMO_MENSAGEM:
+                    print(f"Pacote excede o tamanho máximo de {TAMANHO_MAXIMO_MENSAGEM} caracteres. Truncando.")
+                    dados = dados[:TAMANHO_MAXIMO_MENSAGEM]
+
                 if calcular_checksum(dados) != checksum_recebido:
                     erro_detectado = True
                     break
@@ -65,6 +72,11 @@ def processar_cliente(conexao):
         try:
             numero_sequencia, checksum_recebido, dados = conteudo.split(":")
             numero_sequencia = int(numero_sequencia)
+
+            if len(dados) > TAMANHO_MAXIMO_MENSAGEM:
+                dados_truncados = dados[:TAMANHO_MAXIMO_MENSAGEM]
+                print(f"Mensagem excede o limite. Processando apenas os primeiros {TAMANHO_MAXIMO_MENSAGEM} caracteres.")
+                dados = dados_truncados
 
             checksum_calculado = calcular_checksum(dados)
             if checksum_recebido != checksum_calculado:
